@@ -25,10 +25,10 @@ else:
     source_files = ['./python_bindings/bindings.cpp']
     include_dirs.extend(['./hnswlib/'])
 
-
-libraries = []
+# NOTE(eschkufz): AWS linker dependencies
+libraries = ['aws-cpp-sdk-s3', 'aws-cpp-sdk-core']
+library_dirs = []
 extra_objects = []
-
 
 ext_modules = [
     Extension(
@@ -36,6 +36,7 @@ ext_modules = [
         source_files,
         include_dirs=include_dirs,
         libraries=libraries,
+        library_dirs=library_dirs,
         language='c++',
         extra_objects=extra_objects,
     ),
@@ -62,7 +63,9 @@ def cpp_flag(compiler):
     """Return the -std=c++[11/14] compiler flag.
     The c++14 is prefered over c++11 (when it is available).
     """
-    if has_flag(compiler, '-std=c++14'):
+    if has_flag(compiler, '-std=c++17'):
+        return '-std=c++17'
+    elif has_flag(compiler, '-std=c++14'):
         return '-std=c++14'
     elif has_flag(compiler, '-std=c++11'):
         return '-std=c++11'
@@ -86,11 +89,12 @@ class BuildExt(build_ext):
         'msvc': [],
     }
 
+    # NOTE(eschkufz): I've changed this min from 10.7 to 11.1
     if sys.platform == 'darwin':
         if platform.machine() == 'arm64':
             c_opts['unix'].remove('-march=native')
-        c_opts['unix'] += ['-stdlib=libc++', '-mmacosx-version-min=10.7']
-        link_opts['unix'] += ['-stdlib=libc++', '-mmacosx-version-min=10.7']
+        c_opts['unix'] += ['-stdlib=libc++', '-mmacosx-version-min=11.1']
+        link_opts['unix'] += ['-stdlib=libc++', '-mmacosx-version-min=11.1']
     else:
         c_opts['unix'].append("-fopenmp")
         link_opts['unix'].extend(['-fopenmp', '-pthread'])
@@ -110,8 +114,10 @@ class BuildExt(build_ext):
             ext.extra_compile_args.extend(opts)
             ext.extra_link_args.extend(self.link_opts.get(ct, []))
 
-        build_ext.build_extensions(self)
+        # TODO(eschkufz): Figure out how to force rebuild from the command line
+        self.force = True
 
+        build_ext.build_extensions(self)
 
 setup(
     name='hnswlib',
@@ -121,7 +127,9 @@ setup(
     url='https://github.com/yurymalkov/hnsw',
     long_description="""hnsw""",
     ext_modules=ext_modules,
-    install_requires=['numpy'],
     cmdclass={'build_ext': BuildExt},
+    install_requires=['numpy'],
     zip_safe=False,
 )
+
+

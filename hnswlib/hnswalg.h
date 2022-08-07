@@ -1,8 +1,11 @@
 #pragma once
 
+#include "graft_utils/s3stream.h"
 #include "visited_list_pool.h"
 #include "hnswlib.h"
 #include <atomic>
+#include <aws/core/Aws.h>
+#include <iostream>
 #include <random>
 #include <stdlib.h>
 #include <assert.h>
@@ -22,6 +25,10 @@ namespace hnswlib {
 
         HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location, bool nmslib = false, size_t max_elements=0) {
             loadIndex(location, s, max_elements);
+        }
+
+        HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string& region, const std::string& bucket, const std::string& object, bool nmslib = false, size_t max_elements=0) {
+            loadIndex(region, bucket, object, s, max_elements);
         }
 
         HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200, size_t random_seed = 100) :
@@ -585,104 +592,109 @@ namespace hnswlib {
             max_elements_ = new_max_elements;
         }
 
-        void saveIndex(const std::string &location) {
-            std::ofstream output(location, std::ios::binary);
-            std::streampos position;
+        void saveIndex(std::ostream& os) {
+            writeBinaryPOD(os, offsetLevel0_);
+            writeBinaryPOD(os, max_elements_);
+            writeBinaryPOD(os, cur_element_count);
+            writeBinaryPOD(os, size_data_per_element_);
+            writeBinaryPOD(os, label_offset_);
+            writeBinaryPOD(os, offsetData_);
+            writeBinaryPOD(os, maxlevel_);
+            writeBinaryPOD(os, enterpoint_node_);
+            writeBinaryPOD(os, maxM_);
 
-            writeBinaryPOD(output, offsetLevel0_);
-            writeBinaryPOD(output, max_elements_);
-            writeBinaryPOD(output, cur_element_count);
-            writeBinaryPOD(output, size_data_per_element_);
-            writeBinaryPOD(output, label_offset_);
-            writeBinaryPOD(output, offsetData_);
-            writeBinaryPOD(output, maxlevel_);
-            writeBinaryPOD(output, enterpoint_node_);
-            writeBinaryPOD(output, maxM_);
+            writeBinaryPOD(os, maxM0_);
+            writeBinaryPOD(os, M_);
+            writeBinaryPOD(os, mult_);
+            writeBinaryPOD(os, ef_construction_);
 
-            writeBinaryPOD(output, maxM0_);
-            writeBinaryPOD(output, M_);
-            writeBinaryPOD(output, mult_);
-            writeBinaryPOD(output, ef_construction_);
-
-            output.write(data_level0_memory_, cur_element_count * size_data_per_element_);
+            os.write(data_level0_memory_, cur_element_count * size_data_per_element_);
 
             for (size_t i = 0; i < cur_element_count; i++) {
                 unsigned int linkListSize = element_levels_[i] > 0 ? size_links_per_element_ * element_levels_[i] : 0;
-                writeBinaryPOD(output, linkListSize);
+                writeBinaryPOD(os, linkListSize);
                 if (linkListSize)
-                    output.write(linkLists_[i], linkListSize);
+                    os.write(linkLists_[i], linkListSize);
             }
-            output.close();
         }
 
-        void loadIndex(const std::string &location, SpaceInterface<dist_t> *s, size_t max_elements_i=0) {
-            std::ifstream input(location, std::ios::binary);
+         void saveIndex(const std::string &location) {
+            std::ofstream ofs(location, std::ios::binary);
+            saveIndex(ofs);
+            ofs.close();
+        }
 
-            if (!input.is_open())
-                throw std::runtime_error("Cannot open file");
+        void saveIndex(const std::string& region, const std::string& bucket, const std::string& object) {
+            ensure_aws();
+            Aws::Client::ClientConfiguration config;
+            config.region = region;
+            Aws::S3::S3Client client(config);
+            graft::os3stream os3s(client, bucket, object);
+            saveIndex(os3s);
+            os3s.flush();
+        }
 
+        void loadIndex(std::istream& is, SpaceInterface<dist_t> *s, size_t max_elements_i) {
             // get file size:
-            input.seekg(0,input.end);
-            std::streampos total_filesize=input.tellg();
-            input.seekg(0,input.beg);
+            is.seekg(0,is.end);
+            std::streampos total_filesize=is.tellg();
+            is.seekg(0,is.beg);
 
-            readBinaryPOD(input, offsetLevel0_);
-            readBinaryPOD(input, max_elements_);
-            readBinaryPOD(input, cur_element_count);
+            readBinaryPOD(is, offsetLevel0_);
+            readBinaryPOD(is, max_elements_);
+            readBinaryPOD(is, cur_element_count);
 
             size_t max_elements = max_elements_i;
             if(max_elements < cur_element_count)
                 max_elements = max_elements_;
             max_elements_ = max_elements;
-            readBinaryPOD(input, size_data_per_element_);
-            readBinaryPOD(input, label_offset_);
-            readBinaryPOD(input, offsetData_);
-            readBinaryPOD(input, maxlevel_);
-            readBinaryPOD(input, enterpoint_node_);
+            readBinaryPOD(is, size_data_per_element_);
+            readBinaryPOD(is, label_offset_);
+            readBinaryPOD(is, offsetData_);
+            readBinaryPOD(is, maxlevel_);
+            readBinaryPOD(is, enterpoint_node_);
 
-            readBinaryPOD(input, maxM_);
-            readBinaryPOD(input, maxM0_);
-            readBinaryPOD(input, M_);
-            readBinaryPOD(input, mult_);
-            readBinaryPOD(input, ef_construction_);
-
+            readBinaryPOD(is, maxM_);
+            readBinaryPOD(is, maxM0_);
+            readBinaryPOD(is, M_);
+            readBinaryPOD(is, mult_);
+            readBinaryPOD(is, ef_construction_);
 
             data_size_ = s->get_data_size();
             fstdistfunc_ = s->get_dist_func();
             dist_func_param_ = s->get_dist_func_param();
 
-            auto pos=input.tellg();
-
+            auto pos=is.tellg();
 
             /// Optional - check if index is ok:
 
-            input.seekg(cur_element_count * size_data_per_element_,input.cur);
+            is.seekg(cur_element_count * size_data_per_element_,is.cur);
             for (size_t i = 0; i < cur_element_count; i++) {
-                if(input.tellg() < 0 || input.tellg()>=total_filesize){
+                if(is.tellg() < 0 || is.tellg()>=total_filesize){
                     throw std::runtime_error("Index seems to be corrupted or unsupported");
                 }
 
                 unsigned int linkListSize;
-                readBinaryPOD(input, linkListSize);
+                readBinaryPOD(is, linkListSize);
                 if (linkListSize != 0) {
-                    input.seekg(linkListSize,input.cur);
+                    is.seekg(linkListSize,is.cur);
                 }
             }
 
             // throw exception if it either corrupted or old index
-            if(input.tellg()!=total_filesize)
+            if(is.tellg()!=total_filesize)
                 throw std::runtime_error("Index seems to be corrupted or unsupported");
 
-            input.clear();
+            is.clear();
 
             /// Optional check end
 
-            input.seekg(pos,input.beg);
+            is.seekg(pos,is.beg);
 
             data_level0_memory_ = (char *) malloc(max_elements * size_data_per_element_);
             if (data_level0_memory_ == nullptr)
                 throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
-            input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
+            is.read(data_level0_memory_, cur_element_count * size_data_per_element_);
 
             size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
 
@@ -701,7 +713,7 @@ namespace hnswlib {
             for (size_t i = 0; i < cur_element_count; i++) {
                 label_lookup_[getExternalLabel(i)]=i;
                 unsigned int linkListSize;
-                readBinaryPOD(input, linkListSize);
+                readBinaryPOD(is, linkListSize);
                 if (linkListSize == 0) {
                     element_levels_[i] = 0;
 
@@ -711,7 +723,7 @@ namespace hnswlib {
                     linkLists_[i] = (char *) malloc(linkListSize);
                     if (linkLists_[i] == nullptr)
                         throw std::runtime_error("Not enough memory: loadIndex failed to allocate linklist");
-                    input.read(linkLists_[i], linkListSize);
+                    is.read(linkLists_[i], linkListSize);
                 }
             }
 
@@ -719,10 +731,23 @@ namespace hnswlib {
                 if(isMarkedDeleted(i))
                     num_deleted_ += 1;
             }
+        }
 
-            input.close();
+        void loadIndex(const std::string &location, SpaceInterface<dist_t> *s, size_t max_elements_i=0) {
+            std::ifstream ifs(location, std::ios::binary);
+            if (!ifs.is_open())
+                throw std::runtime_error("Cannot open file");
+            loadIndex(ifs, s, max_elements_i);
+            ifs.close();
+        }
 
-            return;
+        void loadIndex(const std::string& region, const std::string& bucket, const std::string& object, SpaceInterface<dist_t> *s, size_t max_elements_i=0) {
+            ensure_aws();
+            Aws::Client::ClientConfiguration config;
+            config.region = region;
+            Aws::S3::S3Client client(config);
+            graft::is3stream is3s(client, bucket, object);
+            loadIndex(is3s, s, max_elements_i);
         }
 
         template<typename data_t>
@@ -1201,6 +1226,14 @@ namespace hnswlib {
 
         }
 
+    private:
+        void ensure_aws() {
+            static bool once = false;
+            if (!once) {
+                Aws::SDKOptions options;
+                Aws::InitAPI(options);
+            }
+        }
     };
 
 }
