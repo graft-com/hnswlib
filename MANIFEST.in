@@ -1,2 +1,3 @@
 include hnswlib/*.h
+include hnswlib/graft_utils/*.h
 include LICENSE

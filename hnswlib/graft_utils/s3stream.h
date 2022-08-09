@@ -7,7 +7,7 @@
 #include <sstream>
 #include <string>
 
-#include "blockbuf.h"
+#include "graft_utils/blockbuf.h"
 
 // This class provides a c++ stream interface to s3 objects. The main complication
 // here is that s3 doesn't support appends. As a result, we treat an s3 directory

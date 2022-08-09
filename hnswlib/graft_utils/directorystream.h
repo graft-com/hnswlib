@@ -6,7 +6,7 @@
 #include <string>
 #include <sys/stat.h>
 
-#include "blockbuf.h"
+#include "graft_utils/blockbuf.h"
 
 // This class provides a concrete implementation of bufstream for debugging purposes. It uses
 // directories as a block device and creates a new file for every block.
