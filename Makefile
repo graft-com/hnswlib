@@ -1,3 +1,7 @@
+graft_pypi:
+	python -m build
+	twine upload --repository-url http://10.128.29.82:8080/ dist/*
+
 pypi: dist
 	twine upload dist/*
 
